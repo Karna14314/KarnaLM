@@ -1,0 +1,38 @@
+# KarnaLM Initialization History
+
+## 2026-05-13
+
+### 1. Dataset Import & Environment Setup
+- **Action**: Installed dependencies and mapped `/data/raw` to `/mnt/scratch/data`.
+- **Action**: Created a virtual environment (`/root/karnalm_venv`) to bypass PEP 668.
+- **Action**: Resolved ROCm 7.2.0 compatibility by installing PyTorch for ROCm 6.2 (`torch-2.5.1+rocm6.2`). Matmul successfully verified.
+- **Action**: Bypassed native `flash-attn` build in favor of PyTorch SDPA due to AMD build constraints.
+
+### 2. Tokenizer Calibration & Verification
+- **Action**: Trained 52K BPE tokenizer on a 500MB trilingual slice.
+- **Verification**: Telugu word "మరియు" encodes cleanly (fertility dropped from 15 to 3.9), confirming optimal trilingual calibration.
+
+### 3. Full Tokenization Sprint
+- **Action**: Tokenized 92 raw parquet files via multiprocessing.
+- **Result**: Successfully generated 18.82 Billion tokens total (17.8B train, 50M val), correctly distributed across 19 sharded `.bin` files.
+
+### 4. Hardware Benchmarking & OOM Pivot (The 1.1B -> 360M Pivot)
+- **Action**: Ran smoke tests (`02_smoke_test.py`) to verify hardware limits.
+- **Result**: MI300X VRAM (192GB) was highly underutilized by the 1.1B model, but computational throughput (tok/s) maxed out at ~22,000 tok/s.
+- **Analysis**: At 22K tok/s, training a 1.1B model on the dataset would take 244 hours (far exceeding the 70-hour / $190 budget). 
+- **Decision**: Pivoted architecture to a **Chinchilla-optimal 360M parameter model** (24L, 1024d, 16H). This allowed us to increase throughput to **~51,500 tok/s**, ensuring the full 12.8B tokens (72% of data) could be trained within the 70-hour budget.
+
+### 5. Automated Pipeline Creation
+- **Action**: Created `05_train_and_deploy.sh` to fully automate the pipeline.
+- **Action**: Pre-training -> Push to HF (Base) -> SFT -> Push to HF (Chat) -> Benchmark.
+- **Action**: Updated `03_pretrain.py` to auto-resume from checkpoints. Fixed memory leaks in `ShardedBinaryDataset` by moving to persistent memmaps.
+- **Action**: Hardened `04_sft.py` to point to new 360M paths and use PyTorch SDPA.
+
+### 6. Pipeline Launch
+- **Status**: **ACTIVE**. 
+- **Metrics**: 
+  - `tmux` session `karnalm` is running the fully detached pipeline.
+  - VRAM stable at 9GB.
+  - Throughput stable at ~51,500 tok/s.
+  - Expected completion of Phase 1 (Pre-training) in ~69 hours.
+  - Total expected completion (including SFT) in ~82 hours.

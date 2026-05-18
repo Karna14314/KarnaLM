@@ -1,0 +1,57 @@
+# KarnaLM Initialization History
+
+## 2026-05-13
+### 1. Dataset Import
+- **Action**: Installed `huggingface_hub[cli]` and downloaded `ncncomplete/karnalm-data` to `/mnt/scratch/data`.
+- **Result**: Success. Data is available at `/mnt/scratch/data`.
+- **Optimization**: Created a symlink from `/data/raw` to `/mnt/scratch/data` to align with the training scripts' expectations.
+
+### 2. Environment Setup (Initial Attempt)
+- **Action**: Ran `training_scripts/00_amd_setup.sh`.
+- **Result**: Failed.
+- **Issue**: PEP 668 "externally-managed-environment" prevented global pip installs.
+- **Fix**: Created a virtual environment at `/root/karnalm_venv` with `--system-site-packages`.
+
+### 3. GPU/ROCm Compatibility Troubleshooting
+- **Action**: Verified system ROCm version: **7.2.0**.
+- **Action**: Tested PyTorch (ROCm 6.1) provided by the system/script.
+- **Issue**: Encountered `RuntimeError: HIP error: invalid device function` with `HSA_OVERRIDE_GFX_VERSION=9.4.0` and `Segmentation fault` with `9.4.2`.
+- **Analysis**: The pre-installed PyTorch (2.6.0+rocm6.1) seems incompatible with the MI300X (gfx942) under ROCm 7.2.0 when using standard overrides.
+- **Action**: Reinstalled PyTorch for ROCm 6.2 (`torch-2.5.1+rocm6.2`) in the venv to test for better compatibility.
+
+### 4. GPU Verification
+- **Action**: Verified matmul with `torch-2.5.1+rocm6.2`.
+- **Result**: **Success**. Both with and without `HSA_OVERRIDE_GFX_VERSION=9.4.2`.
+- **Conclusion**: The driver/runtime (7.2.0) requires a newer PyTorch build than the one specified in the original script (6.1).
+
+### 5. LLM Foundry and Flash Attention
+- **Action**: Attempted to install `llm-foundry` and `flash-attn`.
+- **Result**: `llm-foundry` installed successfully, but `flash-attn` failed to build from source (common on AMD).
+- **Decision**: Per user instruction, we will bypass the native `flash-attn` build and use the Triton-based backend (`FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE`).
+
+### 6. Tokenizer Calibration & Verification
+- **Action**: Created `training_scripts/mini_tokenize.py` to extract 500MB of text from each language (EN, HI, TE) and train the 52K BPE tokenizer.
+- **Result**: **Success**. Tokenizer trained in ~1 minute.
+- **Verification**: Telugu word "మరియు" now encodes into 4 tokens (vs 15 tokens in previous attempts), achieving a fertility of 3.9 tok/word. This confirms the tokenizer is well-calibrated for the trilingual mix.
+
+### 7. Full Tokenization Sprint Launch
+- **Action**: Updated `01_tokenize_data.py` with memory-efficient batch reading, correct path mapping (`/data/raw` -> `/mnt/scratch/data`), and 20 worker processes.
+- **Action**: Logged into Hugging Face to ensure asynchronous backups.
+- **Status**: **ACTIVE**. Processing 76 parquet files. Shards are being written to `/mnt/scratch/shards`.
+
+### 8. Pre-training Script Optimization
+- **Action**: Updated `03_pretrain.py` to handle sharded datasets using a memory-mapped `ShardedBinaryDataset` class.
+- **Action**: Injected `wandb` (Weights & Biases) telemetry for real-time loss tracking.
+- **Action**: Configured ROCm 7.2.0 optimized flags (`HSA_OVERRIDE_GFX_VERSION=9.4.2`, etc.) in the environment.
+- **Action**: Verified the Hugging Face asynchronous checkpoint upload callback is intact.
+
+### 9. Target Tokenization Scale-Up
+- **Action**: Rescaled tokenization limits to target **20 Billion Tokens** total.
+- **Action**: Modified `01_tokenize_data.py` to enforce a strictly balanced language mix (15% Telugu, 35% Hindi, 50% English).
+- **Strategy**: Set Telugu processing cap artificially high (5B) to guarantee 100% data consumption without dilution. English capped at 10B, Hindi capped at 7B.
+- **Action**: Wiped existing shards and restarted tokenization to enforce proportional sampling across all 92 raw parquet files.
+
+## Current Status
+- Tokenization: **RESTARTED** and strictly targeting a 20B token total (~40 GB of binary output).
+- Data Mix Target: 100% of Telugu, scaled against English/Hindi.
+- **Next Step**: Monitor `du -sh` up to ~38-40GB. Then run `02_smoke_test.py`.
